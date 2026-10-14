@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hold'em Odds Calculator</title>
+<style>
+:root{--bg:#e9efe6;--fg:#14281d;--panel:#dbe6d8;--line:#aebfb0;--brass:#8a5d12;--mut:#4a6354;--win:#2e7d4f;--tie:#b08a2a;--lose:#a43a33;--card:#fbf8ef;--red:#b3261e;--ink:#1a1a1a;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e2519;--fg:#eef3e8;--panel:#17402c;--line:#2d5a44;--brass:#e0bb62;--mut:#9fb8a8;--win:#5bc488;--tie:#e0bd5a;--lose:#e0685f;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e2519;--fg:#eef3e8;--panel:#17402c;--line:#2d5a44;--brass:#e0bb62;--mut:#9fb8a8;--win:#5bc488;--tie:#e0bd5a;--lose:#e0685f;color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 "Georgia","Times New Roman",serif}
+main{max-width:640px;margin:0 auto;padding:20px 14px 40px}
+h1{font-size:28px;margin:0 0 4px;font-weight:700;letter-spacing:-.01em}
+p.sub{margin:0 0 18px;color:var(--mut);font-size:15px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+h2{font-size:15px;margin:0 0 10px;font-weight:700;color:var(--brass)}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.slot{width:48px;height:68px;border-radius:7px;border:2px dashed var(--line);background:transparent;color:var(--mut);font:700 18px Georgia,serif;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.05;padding:0}
+.slot.full{background:var(--card);border:2px solid var(--card);font-size:20px}
+.slot.on{outline:3px solid var(--brass);outline-offset:2px}
+.r{color:var(--red)}.k{color:var(--ink)}
+.sep{width:12px}
+.grid{display:grid;grid-template-columns:repeat(13,1fr);gap:3px}
+.c{aspect-ratio:3/4;border:0;border-radius:4px;background:var(--card);font:700 clamp(10px,3vw,15px)/1 Georgia,serif;cursor:pointer;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.c.used{opacity:.22;cursor:default}
+button:focus-visible{outline:3px solid var(--brass);outline-offset:2px}
+.ctl{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.step{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--fg);font:700 20px Georgia,serif;cursor:pointer}
+.n{font-size:22px;font-weight:700;min-width:1.5ch;text-align:center}
+.reset{margin-left:auto;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--fg);font:15px Georgia,serif;cursor:pointer}
+.big{font-size:54px;font-weight:700;line-height:1;letter-spacing:-.02em}
+.hand{color:var(--mut);margin:4px 0 12px}
+.bar{display:flex;height:16px;border-radius:8px;overflow:hidden;background:var(--line)}
+.bar i{display:block;height:100%}
+.leg{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:15px}
+.leg b{font-variant-numeric:tabular-nums}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.hint{color:var(--mut);font-size:14px;margin:0}
+</style></head>
+<body><main>
+<h1>Hold'em odds</h1>
+<p class="sub">Pick your two cards, add any board cards, and set the number of opponents.</p>
+
+<section>
+<h2>Your hand</h2>
+<div class="row" id="hero"></div>
+<h2 style="margin-top:14px">Board</h2>
+<div class="row" id="board"></div>
+</section>
+
+<section>
+<h2>Opponents</h2>
+<div class="ctl">
+<button class="step" id="minus" aria-label="Fewer opponents">−</button>
+<span class="n" id="opp">1</span>
+<button class="step" id="plus" aria-label="More opponents">+</button>
+<button class="reset" id="reset">Clear all</button>
+</div>
+</section>
+
+<section id="out" aria-live="polite"></section>
+
+<section>
+<h2>Cards</h2>
+<div class="grid" id="grid"></div>
+<p class="hint" style="margin-top:10px">Tap a card to place it in the highlighted slot. Tap a filled slot to remove its card.</p>
+</section>
+<p class="hint">Results come from 20,000 random deals, so they shift by about half a percent between runs. Opponents are assumed to play any two cards.</p>
+</main>
+<script>
+const R="23456789TJQKA",SY=["♠","♥","♦","♣"],NAMES=["High card","Pair","Two pair","Three of a kind","Straight","Flush","Full house","Four of a kind","Straight flush"];
+const B5=13**5,TRIALS=20000;
+let slots=Array(7).fill(null),active=0,opp=1;
+
+function sh(m){for(let h=12;h>=4;h--)if(((m>>(h-4))&31)===31)return h;if((m&15)===15&&(m&4096))return 3;return -1}
+function pk(cat,a){let s=cat;for(let i=0;i<5;i++)s=s*13+(a[i]||0);return s}
+function ev(cs){
+  const rc=new Array(13).fill(0),sm=[0,0,0,0],sc=[0,0,0,0];
+  for(const c of cs){const r=c>>2,s=c&3;rc[r]++;sm[s]|=1<<r;sc[s]++}
+  let fs=-1,all=0;
+  for(let s=0;s<4;s++)if(sc[s]>=5)fs=s;
+  for(let r=0;r<13;r++)if(rc[r])all|=1<<r;
+  if(fs>=0){const h=sh(sm[fs]);if(h>=0)return pk(8,[h])}
+  const q=[],t=[],p=[],k=[];
+  for(let r=12;r>=0;r--){const n=rc[r];if(n)k.push(r);if(n===4)q.push(r);else if(n===3)t.push(r);else if(n===2)p.push(r)}
+  const top=(ex,n)=>{const o=[];for(const r of k){if(!ex.includes(r)){o.push(r);if(o.length===n)break}}return o};
+  if(q.length)return pk(7,[q[0],...top([q[0]],1)]);
+  if(t.length){
+    const pr=[...t.slice(1),...p].sort((a,b)=>b-a);
+    if(pr.length)return pk(6,[t[0],pr[0]]);
+  }
+  if(fs>=0){const f=[];for(let r=12;r>=0&&f.length<5;r--)if(sm[fs]>>r&1)f.push(r);return pk(5,f)}
+  const h=sh(all);if(h>=0)return pk(4,[h]);
+  if(t.length)return pk(3,[t[0],...top([t[0]],2)]);
+  if(p.length>=2)return pk(2,[p[0],p[1],...top([p[0],p[1]],1)]);
+  if(p.length===1)return pk(1,[p[0],...top([p[0]],3)]);
+  return pk(0,k.slice(0,5));
+}
+function sim(hero,board,np,n){
+  const used=new Set([...hero,...board]),deck=[];
+  for(let c=0;c<52;c++)if(!used.has(c))deck.push(c);
+  const bn=5-board.length,need=bn+np*2;
+  let w=0,t=0,l=0,eq=0;
+  for(let i=0;i<n;i++){
+    for(let j=0;j<need;j++){const x=j+(Math.random()*(deck.length-j)|0);const tmp=deck[j];deck[j]=deck[x];deck[x]=tmp}
+    const b=board.concat(deck.slice(0,bn)),hv=ev(hero.concat(b));
+    let lost=false,ties=0;
+    for(let o=0;o<np;o++){
+      const s=bn+o*2,ov=ev([deck[s],deck[s+1],...b]);
+      if(ov>hv){lost=true;break}
+      if(ov===hv)ties++;
+    }
+    if(lost)l++;else if(ties){t++;eq+=1/(1+ties)}else{w++;eq+=1}
+  }
+  return {w:w/n,t:t/n,l:l/n,eq:eq/n};
+}
+
+const $=id=>document.getElementById(id);
+const lbl=c=>`<span>${R[c>>2]==="T"?"10":R[c>>2]}</span><span>${SY[c&3]}</span>`;
+const col=c=>(c&3)===1||(c&3)===2?"r":"k";
+function slotEl(i){
+  const c=slots[i],b=document.createElement("button");
+  b.className="slot"+(c!==null?" full "+col(c):"")+(i===active?" on":"");
+  b.innerHTML=c!==null?lbl(c):"+";
+  b.setAttribute("aria-label",c!==null?"Remove card":"Select slot");
+  b.onclick=()=>{if(slots[i]!==null)slots[i]=null;active=i;render()};
+  return b;
+}
+function pick(c){
+  if(slots.includes(c))return;
+  let i=slots[active]===null?active:slots.findIndex(x=>x===null);
+  if(i<0)i=active;
+  slots[i]=c;
+  const nx=slots.findIndex(x=>x===null);
+  active=nx<0?i:nx;
+  render();
+}
+function buildGrid(){
+  const g=$("grid");g.innerHTML="";
+  for(let s=0;s<4;s++)for(let r=12;r>=0;r--){
+    const c=r*4+s,b=document.createElement("button");
+    b.className="c "+col(c)+(slots.includes(c)?" used":"");
+    b.innerHTML=lbl(c);
+    b.setAttribute("aria-label",`${R[r]} of ${["spades","hearts","diamonds","clubs"][s]}`);
+    b.onclick=()=>pick(c);
+    g.appendChild(b);
+  }
+}
+function result(){
+  const hero=slots.slice(0,2),board=slots.slice(2).filter(x=>x!==null);
+  const out=$("out");
+  if(hero.includes(null)){out.innerHTML='<h2>Your chances</h2><p class="hint">Choose both of your cards to see your odds.</p>';return}
+  const r=sim(hero,board,opp,TRIALS),pc=x=>(x*100).toFixed(1);
+  const made=board.length>=3?NAMES[Math.floor(ev(hero.concat(board))/B5)]:"";
+  out.innerHTML=`<h2>Your chances against ${opp} ${opp===1?"opponent":"opponents"}</h2>
+  <div class="big">${pc(r.eq)}%</div>
+  <div class="hand">${made?"You have: "+made.toLowerCase()+". ":""}Share of the pot you can expect to win, counting split pots.</div>
+  <div class="bar"><i style="width:${pc(r.w)}%;background:var(--win)"></i><i style="width:${pc(r.t)}%;background:var(--tie)"></i><i style="width:${pc(r.l)}%;background:var(--lose)"></i></div>
+  <div class="leg"><span><span class="dot" style="background:var(--win)"></span>Win <b>${pc(r.w)}%</b></span><span><span class="dot" style="background:var(--tie)"></span>Tie <b>${pc(r.t)}%</b></span><span><span class="dot" style="background:var(--lose)"></span>Lose <b>${pc(r.l)}%</b></span></div>`;
+}
+function render(){
+  const h=$("hero"),b=$("board");h.innerHTML="";b.innerHTML="";
+  for(let i=0;i<2;i++)h.appendChild(slotEl(i));
+  for(let i=2;i<7;i++){b.appendChild(slotEl(i));if(i===4){const s=document.createElement("span");s.className="sep";b.appendChild(s)}}
+  $("opp").textContent=opp;
+  buildGrid();result();
+}
+$("minus").onclick=()=>{if(opp>1){opp--;render()}};
+$("plus").onclick=()=>{if(opp<8){opp++;render()}};
+$("reset").onclick=()=>{slots=Array(7).fill(null);active=0;render()};
+render();
+</script></body></html>
